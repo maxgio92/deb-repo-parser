@@ -29,7 +29,7 @@ func GetPackages(packageName string, packageSection string, mirrorURL string, di
 
 	done := make(chan bool, 1)
 
-	bar := progressbar.Default(int64(len(dists)), "Getting dists")
+	bar := progressbar.Default(int64(len(dists)), "Total")
 
 	// Run producer workers.
 	for _, v := range dists {
@@ -38,7 +38,7 @@ func GetPackages(packageName string, packageSection string, mirrorURL string, di
 	}
 
 	// Run consumer worker.
-	go consumePackages(done, packages, packagesCh, errCh)
+	go consumePackages(done, &packages, packagesCh, errCh)
 
 	// Wait for producers to complete.
 	perDistWG.Wait()
@@ -51,17 +51,17 @@ func GetPackages(packageName string, packageSection string, mirrorURL string, di
 	return packages, nil
 }
 
-func consumePackages(done chan bool, packages []archive.Package, packagesCh chan []archive.Package, errCh chan error) {
+func consumePackages(done chan bool, packages *[]archive.Package, packagesCh chan []archive.Package, errCh chan error) {
 	for errCh != nil || packagesCh != nil {
 		select {
 		case p, ok := <-packagesCh:
 			if ok {
 				log.Info("Scanned DB")
 				if len(p) > 0 {
-					packages = append(packages, p...)
-					log.WithField("name of first", p[0].Package).Info("New packages found")
-					continue
+					*packages = append(*packages, p...)
+					log.Infof("New %d packages found", len(p))
 				}
+				continue
 			}
 			packagesCh = nil
 		case e, ok := <-errCh:

@@ -52,20 +52,23 @@ func getDistPackages(bar *progressbar.ProgressBar, waitGroup *sync.WaitGroup, pa
 	}
 
 	indexesWG.Add(len(indexPaths))
-	internalBar := progressbar.Default(int64(len(indexPaths)), fmt.Sprintf("Getting index for dist %s", dist))
+	internalBar := progressbar.Default(int64(len(indexPaths)), fmt.Sprintf("Indexing packages for dist %s", dist))
 
 	// Run producer workers.
 	for _, v := range indexPaths {
 		if EXCLUDE_INSTALLERS && strings.Contains(v, "debian-installer") {
+			indexesWG.Done()
 			continue
 		}
-		if strings.Contains(v, "non-free") {
-			continue
-		}
+		//if strings.Contains(v, "non-free") {
+		//	indexesWG.Done()
+		//	continue
+		//}
 
 		indexURL, err := url.JoinPath(mirrorURL, "dists", dist, v)
 		if err != nil {
 			errCh <- err
+			indexesWG.Done()
 			return
 		}
 
@@ -78,7 +81,7 @@ func getDistPackages(bar *progressbar.ProgressBar, waitGroup *sync.WaitGroup, pa
 			select {
 			case p, ok := <-packagesInternalCh:
 				if ok {
-					log.Info("getIndexPackages: get response from DB")
+					log.Info("got a response from DB")
 					if len(p) > 0 {
 						packagesCh <- p
 					}
@@ -87,13 +90,14 @@ func getDistPackages(bar *progressbar.ProgressBar, waitGroup *sync.WaitGroup, pa
 				packagesInternalCh = nil
 			case e, ok := <-errInternalCh:
 				if ok {
-					log.Info("getIndexPackages: get error from DB")
+					log.Info("got an error from DB")
 					errCh <- e
 					continue
 				}
 				errInternalCh = nil
 			}
 		}
+		log.Info("consumers are done")
 		done <- true
 	}()
 
@@ -113,16 +117,15 @@ func getIndexPackages(progressBar *progressbar.ProgressBar, waitGroup *sync.Wait
 	log.WithField("URL", indexURL).Debug("Downloading compressed index file")
 
 	resp, err := http.Get(indexURL)
-	defer resp.Body.Close()
 	if err != nil {
 		errCh <- err
 		return
 	}
-
 	if got, want := resp.StatusCode, http.StatusOK; got != want {
 		errCh <- fmt.Errorf("download(%s): unexpected HTTP status code: got %d, want %d", indexURL, got, want)
 		return
 	}
+	defer resp.Body.Close()
 
 	log.WithField("URL", indexURL).Debug("Decompressing index file")
 
@@ -144,12 +147,14 @@ func getIndexPackages(progressBar *progressbar.ProgressBar, waitGroup *sync.Wait
 
 	log.WithField("URL", indexURL).Debug("Querying packages from DB")
 
-	p, err := db.Map(func(p *archive.Package) bool {
+	query := func(p *archive.Package) bool {
 		if strings.Contains(p.Package, packageName) && p.Section == packageSection && p.Architecture.CPU != "all" {
 			return true
 		}
 		return false
-	})
+	}
+
+	p, err := db.Map(query)
 	if err != nil {
 		errCh <- err
 		return
